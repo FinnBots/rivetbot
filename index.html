@@ -453,9 +453,14 @@ const DEATH_MS=1100, CLEAR_MS=1500;
 /* deterministic RNG so headless runs reproduce */
 function rnd(s){ s.rng=(s.rng*1664525+1013904223)>>>0; return s.rng/4294967296; }
 
-function effStage(st){ return st<=40 ? st : 33+((st-41)%8); }
-function passOf(st){ return Math.min(5, Math.floor((effStage(st)-1)/8)+1); }
-function screenOf(st){ return (effStage(st)-1)%8; }
+/* The arcade structure is N screens x 5 passes, then it loops back into the final
+   pass. Derive EVERY bound from SCREENS.length: a count hard-coded here would strand
+   any screen added later (BotFord's CAVE_LETTERS pinned at 8 is that anti-pattern).
+   With 8 screens these are identical to the shipped 40 / loop-to-33 numbers. */
+const NSCREENS=SCREENS.length, LAST_STAGE=5*NSCREENS, LOOP_TO=4*NSCREENS+1;
+function effStage(st){ return st<=LAST_STAGE ? st : LOOP_TO+((st-LAST_STAGE-1)%NSCREENS); }
+function passOf(st){ return Math.min(5, Math.floor((effStage(st)-1)/NSCREENS)+1); }
+function screenOf(st){ return (effStage(st)-1)%NSCREENS; }
 
 const sol=(s,c,r)=> (c<0||c>=TW) ? true : (r<0||r>=TH ? false : s.grid[r][c]==='#');
 const lad=(s,c,r)=> (c<0||c>=TW||r<0||r>=TH) ? false : s.grid[r][c]==='H';
