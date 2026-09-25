@@ -344,7 +344,7 @@ body:not(.mode-paid) .facts{ display:none; }
         <li>Clear all <b>12 rivets</b> off the rig before the clock runs out.</li>
         <li>Arrows / WASD / the d-pad to walk and to climb ladders; <b>JUMP</b> / Space to jump.</li>
         <li>Rivet <b>100</b> \u00b7 oil can <b>50</b> and it <b>holds the clock</b> for a few seconds \u00b7 the time you have left is paid as a <b>bonus</b> when the rig is clear.</li>
-        <li><b>Clankers</b> patrol the girders, take the ladders, and drink any oil can you leave behind.</li>
+        <li><b>Clankers</b> work the girders and ladders and drink any oil can you leave behind. The ones with an <b>amber lamp</b> are tracking you \u2014 they will climb to your tier.</li>
         <li>From stage 9 the caged <b>Crane</b> is loose \u2014 it ignores the rig and flies straight at you.</li>
         <li><b>5 lives</b>, one more every 10,000. A touch, the clock, a fall off the bottom, or riding a lift into the roof all scrap you.</li>
         <li>Score ranks on the leaderboard; time is the tiebreak.</li>
@@ -595,6 +595,17 @@ const TIME_START=900, TIME_TICK_MS=100, BONUS_PER_TIME=1;
 const RIVET_PTS=100, CAN_PTS=50, CAN_FREEZE_MS=4200;
 const START_LIVES=5, EXTRA_LIFE=10000;
 const CLANKER_SPD=46, CLANKER_CLIMB=38, LADDER_CHANCE=0.30;
+const CW=11;                                 /* clanker box width */
+/* A HUNTER reads the rig: on the Bot's tier it walks at the Bot, off it it makes
+   for the nearest ladder that leads to the Bot's tier. A PATROLLER keeps the
+   original random-ladder wander, so a screen still has traffic to read and is not
+   a wall of homing bots. The share of hunters is the difficulty dial. */
+const HUNT_SHARE=[0,0.45,0.45,0.60,0.65,0.80];   /* by pass, 1-based */
+const HUNT_COMMIT=0.92;                          /* how often a hunter takes its ladder */
+const DETOUR_S=1.2;                              /* how long a baulked hunter looks for a way round */
+const CLIMB_CD=0.6;                              /* no reversing straight back down a ladder */
+/* extra Clankers over the screen's own 'k' markers, by pass (1-based) */
+const KEXTRA=[0,1,0,2,2,3];
 const CRANE_SPD=33, CRANE_RELEASE_MS=2400;
 const LIFT_SPD=26, LIFT_W=2;
 const DEATH_MS=1100, CLEAR_MS=1500;
@@ -657,12 +668,22 @@ function loadStage(s){
 
   const p=passOf(s.stage), mult=(p>=5?1.25:1);
   /* pass 2 = the Clankers are gone and only the Crane flies */
-  if(p!==2){
-    const extra = p>=3 ? 1 : 0;
+  if(p!==2 && spawns.length){
+    const share=HUNT_SHARE[Math.min(5,p)], extra=KEXTRA[Math.min(5,p)];
     for(let i=0;i<spawns.length+extra;i++){
       const sp=spawns[i%spawns.length];
-      s.clankers.push({ x:sp.c*TS+(i>=spawns.length?TS*2:0), y:sp.r*TS+2,
-                        dir:(i%2?-1:1), mode:'walk', tgtY:0, spd:CLANKER_SPD*mult, lastC:-1 });
+      /* a doubled-up spawn is nudged along its own tier, and only to a tile that
+         actually holds it up - an offset that lands in a wall or over a pit used
+         to drop a Clanker into a stage it could never walk out of */
+      let x=sp.c*TS+1;
+      if(i>=spawns.length){
+        const want=(i%2?-1:1)*TS*(1+Math.floor(i/spawns.length));
+        const cand=Math.max(0, Math.min(RUN.w-CW, x+want));
+        if(propped(s,cand,sp.r+1) && !hitsBox(s,cand,sp.r*TS+2)) x=cand;
+      }
+      s.clankers.push({ x:x, y:sp.r*TS+2, dir:(i%2?-1:1), mode:'walk', tgtY:0,
+                        spd:CLANKER_SPD*mult, lastC:-1, hunt:(rnd(s)<share),
+                        detour:0, climbCd:0, climbDir:0 });
     }
   }
   if(p>=2) s.crane={ x:s.cageC*TS, y:s.cageR*TS, spd:CRANE_SPD*mult, out:false };
@@ -792,40 +813,144 @@ function addScore(s,n){
 }
 function kill(s,ev){ if(s.phase!=='play') return; s.phase='dying'; s.phaseT=0; ev.die=true; }
 
-/* ---- enemies ------------------------------------------------------------- */
+/* ---- enemies -------------------------------------------------------------
+   TWO FACTS ABOUT THIS RIG have to be in the enemy model, and both are the
+   centre-vs-leading-edge family of bug that verify-rivets caught in the PLAYER
+   at ship time (a ladder tops out ABOVE the surface it serves):
+     1. a ladder PUNCHES THROUGH the girder row it serves, so the tile directly
+        under a bot standing at a ladder top is a HOLE, not a girder;
+     2. a bot is held up when ANY column under its box is solid (or is the ladder
+        it is riding) - not when the single tile ahead of it is.
+   Model it with "is the tile ahead solid?" alone and a Clanker that climbs reads
+   NO FLOOR in BOTH directions, reverses its heading every single frame and stands
+   there for the rest of the stage. That is what shipped: a headless probe found
+   stalls of up to 24s with 1457 direction flips, on 5 of the 8 screens. The walk
+   step below asks "will anything hold me up there?", and if the answer is no on
+   BOTH sides the bot rides the ladder it is standing on instead of flipping - so
+   no Clanker state can ever have zero legal moves.                           */
+
+/* the box-vs-grid test for a clanker-sized box (the player's is hitsSolid) */
+function hitsBox(s,x,y){
+  const c0=Math.floor(x/TS), c1=Math.floor((x+CW-1)/TS);
+  const r0=Math.floor(y/TS), r1=Math.floor((y+PH-1)/TS);
+  for(let r=r0;r<=r1;r++) for(let c=c0;c<=c1;c++) if(sol(s,c,r)) return true;
+  return false;
+}
+/* held up at x with the feet on row fr? ANY column under the box will do, and the
+   ladder itself counts - that is what lets a bot stand at a punched girder row */
+function propped(s,x,fr){
+  const c0=Math.floor(x/TS), c1=Math.floor((x+CW-1)/TS);
+  for(let c=c0;c<=c1;c++) if(sol(s,c,fr)||lad(s,c,fr)) return true;
+  return false;
+}
+/* Walking the ladder run that passes through (c, fr): the feet row a bot would
+   REST on going up / down, or null if that way leads nowhere it could stand.
+   A rest row is a girder row the ladder punches (solid either side) or the floor
+   the ladder foots on. Only the CONTIGUOUS run counts, so a second ladder further
+   up the same column is never teleported to. */
+function stopUp(s,c,fr){
+  for(let r=fr-1;r>=1;r--){
+    if(!lad(s,c,r)) return null;                    /* the run ended in mid air */
+    if(sol(s,c-1,r)||sol(s,c+1,r)) return r;        /* a girder tier on the way up */
+  }
+  return null;
+}
+function stopDown(s,c,fr){
+  if(!lad(s,c,fr)) return null;                     /* no hole under me to drop into */
+  for(let r=fr+1;r<TH;r++){
+    if(sol(s,c,r)) return r;                        /* the ladder foots on this girder */
+    if(!lad(s,c,r)) return null;
+    if(sol(s,c-1,r)||sol(s,c+1,r)) return r;
+  }
+  return null;
+}
+/* the nearest ladder along this tier that can carry a bot the way it wants to go.
+   The scan stops where the TIER stops, so a hunter never sets off across a pit. */
+function ladderOnTier(s,x,fr,want){
+  let best=null;
+  for(const side of [-1,1]){
+    let c=Math.floor((x+CW/2)/TS);
+    for(let n=0;n<TW;n++,c+=side){
+      if(c<0||c>=TW) break;
+      if(sol(s,c,fr-1)) break;                              /* wall across the tier */
+      if(!sol(s,c,fr) && !lad(s,c,fr)) break;               /* the tier ends here */
+      const ok = want<0 ? stopUp(s,c,fr)!==null : stopDown(s,c,fr)!==null;
+      if(ok){ if(!best||n<best.n) best={c:c,n:n,side:side}; break; }
+    }
+  }
+  return best;
+}
+
 function stepClankers(s,dt,ev){
+  const pFeet=Math.floor((s.p.y+PH)/TS), pMid=s.p.x+PW/2;
   for(let i=0;i<s.clankers.length;i++){
     const k=s.clankers[i];
+
     if(k.mode==='climb'){
       const dy=Math.sign(k.tgtY-k.y);
       k.y+=dy*CLANKER_CLIMB*dt;
-      if(Math.abs(k.tgtY-k.y)<2){ k.y=k.tgtY; k.mode='walk'; }
+      if(Math.abs(k.tgtY-k.y)<2){ k.y=k.tgtY; k.mode='walk'; k.lastC=-1; }
     } else {
-      const c=Math.floor((k.x+7)/TS), r=Math.floor((k.y+PH)/TS);
-      /* at a new column, maybe take a ladder */
+      const fr=Math.floor((k.y+PH)/TS), c=Math.floor((k.x+CW/2)/TS);
+      /* which way is the Bot? 0 = this tier, -1 = above, +1 = below */
+      const want = pFeet<fr-1 ? -1 : pFeet>fr+1 ? 1 : 0;
+
+      if(k.detour>0) k.detour-=dt;
+      if(k.climbCd>0) k.climbCd-=dt;
+      /* A hunter that simply re-aims at the Bot every frame PINS itself against
+         whatever is between them: it turns back toward the Bot the instant the walk
+         step has bounced it off the pit edge, and presses there for the whole stage
+         (probed at 10-39s on 13 of 16 fixtures). So a baulked hunter goes on DETOUR
+         - it stops aiming for a moment, keeps the heading the bounce gave it, and
+         takes the first ladder it finds, which is how you actually get round a hole. */
+      if(k.hunt && k.detour<=0){
+        if(want===0) k.dir = (pMid < k.x+CW/2) ? -1 : 1;    /* same tier: walk at it */
+        else { const l=ladderOnTier(s,k.x,fr,want); if(l && l.n>0) k.dir=l.side; }
+      }
+
+      /* ladder decision, taken once per column so it does not re-roll every frame */
       if(c!==k.lastC){
         k.lastC=c;
-        if(lad(s,c,r) || lad(s,c,r-1)){
-          if(rnd(s)<LADDER_CHANCE){
-            let up=rnd(s)<0.5, tgt=null;
-            if(up){ for(let rr=r-1;rr>=0;rr--){ if(!lad(s,c,rr)){ if(sol(s,c,rr)) break; tgt=rr*TS+2; break; } } }
-            else  { for(let rr=r+1;rr<TH;rr++){ if(!lad(s,c,rr)){ if(sol(s,c,rr)) tgt=(rr-1)*TS+2; break; } } }
-            if(tgt!==null && Math.abs(tgt-k.y)>4){ k.mode='climb'; k.tgtY=tgt; k.x=c*TS+3; }
-          }
+        const up=stopUp(s,c,fr), down=stopDown(s,c,fr);
+        let go=null;
+        if(k.hunt && want<0 && up!==null) go=up;
+        else if(k.hunt && want>0 && down!==null) go=down;
+        if(go!==null && rnd(s)>=HUNT_COMMIT) go=null;        /* not slavishly */
+        /* a detouring hunter takes the first way off this tier it can find */
+        if(go===null && k.hunt && k.detour>0) go = (up!==null?up:down);
+        if(go===null && (up!==null||down!==null) && rnd(s)<LADDER_CHANCE){
+          const wantUp = up!==null && (down===null || rnd(s)<0.5);
+          go = wantUp ? up : down;
         }
+        /* and never straight back down the ladder it just came up */
+        if(go!==null && k.climbCd>0 && Math.sign(go-fr)!==k.climbDir) go=null;
+        if(go!==null){ k.mode='climb'; k.tgtY=(go-1)*TS+2; k.x=c*TS+(TS-CW)/2;
+                       k.climbDir=Math.sign(go-fr); k.climbCd=CLIMB_CD; }
       }
+
       if(k.mode==='walk'){
+        const bodyR=Math.floor((k.y+PH/2)/TS);
+        const blockedAt=function(nx,d){
+          const lead=Math.floor((d>0? nx+CW-1 : nx)/TS);
+          return lead<0||lead>=TW||sol(s,lead,bodyR)||!propped(s,nx,fr);
+        };
         const nx=k.x+k.dir*k.spd*dt;
-        const aheadC=Math.floor((nx+(k.dir>0?11:0))/TS);
-        const footR=Math.floor((k.y+PH+1)/TS);
-        if(sol(s,aheadC,Math.floor((k.y+PH/2)/TS)) || !sol(s,aheadC,footR) || aheadC<0 || aheadC>=TW) k.dir=-k.dir;
-        else k.x=nx;
+        if(!blockedAt(nx,k.dir)) k.x=nx;
+        else if(!blockedAt(k.x-k.dir*k.spd*dt,-k.dir)){ k.dir=-k.dir; k.detour=DETOUR_S; }
+        else {
+          /* refused BOTH ways: perched on a ladder with no floor either side.
+             Ride the ladder rather than flip on the spot for ever (see the note). */
+          const up=stopUp(s,c,fr), down=stopDown(s,c,fr);
+          const go = (down!==null) ? down : up;
+          if(go!==null){ k.mode='climb'; k.tgtY=(go-1)*TS+2; k.x=c*TS+(TS-CW)/2;
+                         k.climbDir=Math.sign(go-fr); k.climbCd=CLIMB_CD; k.lastC=-1; }
+        }
       }
     }
     /* clankers eat the oil cans you leave behind */
     for(let j=s.cans.length-1;j>=0;j--){ const it=s.cans[j];
-      if(boxHit(k.x,k.y,11,PH,it.c*TS+3,it.r*TS+3,10,12)){ s.cans.splice(j,1); ev.eaten=true; } }
-    if(boxHit(s.p.x,s.p.y,PW,PH,k.x+1,k.y+1,9,PH-2)) kill(s,ev);
+      if(boxHit(k.x,k.y,CW,PH,it.c*TS+3,it.r*TS+3,10,12)){ s.cans.splice(j,1); ev.eaten=true; } }
+    if(boxHit(s.p.x,s.p.y,PW,PH,k.x+1,k.y+1,CW-2,PH-2)) kill(s,ev);
   }
 }
 
@@ -1011,11 +1136,14 @@ if(!HEADLESS){
     ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y-1,13,16);
     ctx.fillStyle=PLUM;  ctx.fillRect(x,y+1,11,10);
     ctx.fillStyle='#7a6470'; ctx.fillRect(x,y+1,11,3);
-    ctx.fillStyle=AMBER; ctx.fillRect(x+2,y+4,7,3);
+    /* a HUNTER is tracking you, so it has to be readable at a glance: hot visor
+       and a live amber beacon; a patroller's visor is dim and its lamp is mint */
+    ctx.fillStyle=k.hunt?AMBER:'#a8763c'; ctx.fillRect(x+2,y+4,7,3);
     ctx.fillStyle=RUST;  ctx.fillRect(x+2+(k.dir>0?4:0),y+4,3,3);
     ctx.fillStyle=PLUMD; ctx.fillRect(x,y+11,11,4);
     ctx.fillStyle='#8f7a86'; ctx.fillRect(x+1+wob,y+12,3,2); ctx.fillRect(x+7-wob,y+12,3,2);
-    ctx.fillStyle=MINT; ctx.fillRect(x+5,y-3,1,4); ctx.fillRect(x+4,y-4,3,2);
+    ctx.fillStyle=k.hunt?AMBER:MINT; ctx.fillRect(x+5,y-3,1,4); ctx.fillRect(x+4,y-4,3,2);
+    if(k.hunt && wob){ ctx.fillStyle=CREAM; ctx.fillRect(x+4,y-5,3,1); }
   }
   /* original FinnBots flier: rotor drone with a magnet hook */
   function drawCrane(cr){
