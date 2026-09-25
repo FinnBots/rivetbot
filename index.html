@@ -1274,18 +1274,25 @@ if(!HEADLESS){
   }
   /* original FinnBots enemy: tracked scrap-bot with a single amber visor */
   function drawClanker(k){
+    /* ARCADE/SPECTRUM PARITY (researched 2026-09-25): in the 1983 original every sprite —
+       the player AND the enemies — is 16x16, 32 bytes at 2 bytes per row, drawn by one
+       routine that loops `LD B,$10 ; 16 pixels high` and indexes its table by `a * 32`
+       (confirmed in the reverse-engineered source). Our hero already drew 16 wide; the
+       Clanker drew 13, so the cast was ~20% small. Widened to 16 over its UNCHANGED 11px
+       collision box — the same sprite-over-box ratio the hero uses, so the sprite still
+       over-covers its hitbox and nothing about the physics moves. */
     const x=Math.round(k.x), y=Math.round(k.y), wob=Math.floor(t/120)%2;
-    ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y-1,13,16);
-    ctx.fillStyle=PLUM;  ctx.fillRect(x,y+1,11,10);
-    ctx.fillStyle='#7a6470'; ctx.fillRect(x,y+1,11,3);
+    ctx.fillStyle=PLUMD; ctx.fillRect(x-2,y-1,16,17);
+    ctx.fillStyle=PLUM;  ctx.fillRect(x-1,y+1,14,11);
+    ctx.fillStyle='#7a6470'; ctx.fillRect(x-1,y+1,14,3);
     /* a HUNTER is tracking you, so it has to be readable at a glance: hot visor
        and a live amber beacon; a patroller's visor is dim and its lamp is mint */
-    ctx.fillStyle=k.hunt?AMBER:'#a8763c'; ctx.fillRect(x+2,y+4,7,3);
-    ctx.fillStyle=RUST;  ctx.fillRect(x+2+(k.dir>0?4:0),y+4,3,3);
-    ctx.fillStyle=PLUMD; ctx.fillRect(x,y+11,11,4);
-    ctx.fillStyle='#8f7a86'; ctx.fillRect(x+1+wob,y+12,3,2); ctx.fillRect(x+7-wob,y+12,3,2);
-    ctx.fillStyle=k.hunt?AMBER:MINT; ctx.fillRect(x+5,y-3,1,4); ctx.fillRect(x+4,y-4,3,2);
-    if(k.hunt && wob){ ctx.fillStyle=CREAM; ctx.fillRect(x+4,y-5,3,1); }
+    ctx.fillStyle=k.hunt?AMBER:'#a8763c'; ctx.fillRect(x+1,y+4,9,4);
+    ctx.fillStyle=RUST;  ctx.fillRect(x+1+(k.dir>0?5:0),y+4,4,4);
+    ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y+12,14,4);
+    ctx.fillStyle='#8f7a86'; ctx.fillRect(x+wob,y+13,4,2); ctx.fillRect(x+8-wob,y+13,4,2);
+    ctx.fillStyle=k.hunt?AMBER:MINT; ctx.fillRect(x+5,y-4,2,5); ctx.fillRect(x+4,y-5,4,2);
+    if(k.hunt && wob){ ctx.fillStyle=CREAM; ctx.fillRect(x+4,y-6,4,1); }
   }
   /* original FinnBots flier: rotor drone with a magnet hook */
   function drawCrane(cr){
