@@ -1087,7 +1087,12 @@ function loadStage(s){
 }
 
 function newRun(){
-  const s={ phase:'play', score:0, lives:START_LIVES, stage:1, timeMs:0,
+  /* `phase` is the CHASSIS TERMINATION CONTRACT and nothing else: play | dead.
+            The death and stage-clear beats used to live in it, and a sub-state parked
+            there is one no driver can see past — every driver in the factory loops
+            `while(phase==="play")`, so each death TRUNCATED the run being measured.
+            `beat` carries them instead: '' | 'dying' | 'clear'. */
+  const s={ phase:'play', beat:'', score:0, lives:START_LIVES, stage:1, timeMs:0,
             nextLife:EXTRA_LIFE, rng:0x5bf03635>>>0, rivetsGot:0,
             inL:false, inR:false, inU:false, inD:false, inJump:false, jumpArmed:true };
   loadStage(s);
@@ -1195,8 +1200,8 @@ function stepPickups(s,ev){
   for(let i=s.cans.length-1;i>=0;i--){ const it=s.cans[i];
     if(boxHit(p.x,p.y,PW,PH,it.c*TS+3,it.r*TS+3,10,12)){
       s.cans.splice(i,1); addScore(s,CAN_PTS); s.freezeMs=CAN_FREEZE_MS; ev.can=true; } }
-  if(s.rivets.length===0 && s.phase==='play'){
-    s.phase='clear'; s.phaseT=0;
+  if(s.rivets.length===0 && s.phase==='play' && !s.beat){
+    s.beat='clear'; s.phaseT=0;
     addScore(s, Math.max(0,s.timeLeft)*BONUS_PER_TIME); ev.clear=true;
   }
 }
@@ -1204,7 +1209,7 @@ function addScore(s,n){
   s.score+=n;
   while(s.score>=s.nextLife){ s.lives++; s.nextLife+=EXTRA_LIFE; }
 }
-function kill(s,ev){ if(s.phase!=='play') return; s.phase='dying'; s.phaseT=0; ev.die=true; }
+function kill(s,ev){ if(s.phase!=='play'||s.beat) return; s.beat='dying'; s.phaseT=0; ev.die=true; }
 
 /* ---- enemies -------------------------------------------------------------
    TWO FACTS ABOUT THIS RIG have to be in the enemy model, and both are the
@@ -1371,29 +1376,29 @@ function stepGame(s,dtMs){
   const dt=Math.min(0.05,dtMs/1000);
   s.timeMs+=dtMs;
 
-  if(s.phase==='dying'){
+  if(s.beat==='dying'){
     s.phaseT+=dtMs;
     if(s.phaseT>=DEATH_MS){
       s.lives--;
-      if(s.lives<=0){ s.phase='dead'; ev.over=true; }
-      else { s.phase='play'; loadStage(s); }
+      if(s.lives<=0){ s.phase='dead'; s.beat=''; ev.over=true; }
+      else { s.beat=''; loadStage(s); }
     }
     return ev;
   }
-  if(s.phase==='clear'){
+  if(s.beat==='clear'){
     s.phaseT+=dtMs;
-    if(s.phaseT>=CLEAR_MS){ s.stage++; s.phase='play'; loadStage(s); ev.stage=true; }
+    if(s.phaseT>=CLEAR_MS){ s.stage++; s.beat=''; loadStage(s); ev.stage=true; }
     return ev;
   }
 
   stepLifts(s,dt);
   stepPlayer(s,dt,ev);
-  if(s.phase!=='play') return ev;
+  if(s.phase!=='play'||s.beat) return ev;
   stepPickups(s,ev);
-  if(s.phase!=='play') return ev;
+  if(s.phase!=='play'||s.beat) return ev;
   stepClankers(s,dt,ev);
   stepCrane(s,dt,ev);
-  if(s.phase!=='play') return ev;
+  if(s.phase!=='play'||s.beat) return ev;
 
   /* the clock — an oil can pauses it for a while, exactly like the original */
   if(s.freezeMs>0) s.freezeMs-=dtMs;
@@ -1575,7 +1580,7 @@ if(!HEADLESS){
   }
   /* hero: Bot 106 PNG when it loads, drawn-bot fallback otherwise */
   function drawHero(){
-    const p=s.p, x=Math.round(p.x)-3, y=Math.round(p.y)-2, blink=(s.phase==='dying');
+    const p=s.p, x=Math.round(p.x)-3, y=Math.round(p.y)-2, blink=(s.beat==='dying');
     if(blink && Math.floor(t/90)%2) return;
     /* contact shadow so the bot sits ON the girder, not floating over it */
     ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillRect(x+3,y+16,10,2);
@@ -1620,8 +1625,8 @@ if(!HEADLESS){
     ctx.textAlign='right'; ctx.fillText('RIVETS '+s.rivets.length,RUN.w-4,10); ctx.textAlign='left';
     if(s.freezeMs>0){ ctx.fillStyle=MINT; ctx.font='9px ui-monospace,monospace';
       ctx.textAlign='center'; ctx.fillText('CLOCK HELD',RUN.w/2,10); ctx.textAlign='left'; }
-    if(s.phase==='clear') banner('RIG CLEAR','TIME BONUS  +'+Math.max(0,s.timeLeft));
-    if(s.phase==='dying') banner('SCRAPPED','');
+    if(s.beat==='clear') banner('RIG CLEAR','TIME BONUS  +'+Math.max(0,s.timeLeft));
+    if(s.beat==='dying') banner('SCRAPPED','');
   }
 
   /* ---------------- input: 4-way d-pad LEFT + round JUMP RIGHT ------------- */
