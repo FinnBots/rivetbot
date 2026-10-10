@@ -514,6 +514,21 @@ canvas{ touch-action:none; }
 (function(){
   if (window.FB_SEED) return;
   var NATIVE = Math.random;
+  /* PAID RUNS ON A SEED FREE PLAY NEVER SEES (opt-in, 2026-10-10). In a game whose
+   * skill is DISCOVERING something hidden (a word, a grid's answer), free practice
+   * of today's run REVEALS the paid run's answers. A game opts in with the
+   * attribute data-fb-paid=entry on this layer's own script tag (apply-seed.js
+   * --paid-seed=entry writes it): each paid start (Engine.start, the
+   * call the wallet layer makes after the entry is confirmed) is dealt a fresh seed
+   * from crypto.getRandomValues — a different run every entry, from the same
+   * difficulty bands, that no amount of free practice can preview. Free play,
+   * retries and practice are unchanged. Games without the attribute: unchanged. */
+  var PAID_MODE = '';
+  try { var me = document.currentScript; PAID_MODE = (me && me.getAttribute && me.getAttribute('data-fb-paid')) || ''; } catch (e) {}
+  function freshSeed(){
+    try { var a = new Uint32Array(1); (window.crypto || self.crypto).getRandomValues(a); return a[0] >>> 0; }
+    catch (e) { return (NATIVE() * 4294967296) >>> 0; }
+  }
 
   function hash32(str){
     var h = 2166136261 >>> 0;
@@ -546,7 +561,15 @@ canvas{ touch-action:none; }
      * engine never reads. So the control adapts to what the game actually
      * uses, discovered at runtime rather than from a list of game names. */
     usesRandom: function(){ return used > 0; },
+    paidMode: PAID_MODE,
+    inPaid: false,
+    pinned: null,
+    /* While a paid start is building its run the seed is PINNED: the chassis's own
+     * freshRun() calls reseed() inside Engine.start, and without the pin that call
+     * would put the daily seed straight back. */
     reseed: function(){
+      if (FB.pinned !== null) return FB.set(FB.pinned);
+      FB.inPaid = false;
       return FB.daily ? FB.set(FB.todaySeed())
                       : FB.set((NATIVE() * 4294967296) >>> 0);
     },
@@ -566,7 +589,13 @@ canvas{ touch-action:none; }
     ['start', 'resumeFree'].forEach(function(k){
       if (typeof o[k] !== 'function' || o[k].__fbSeeded) return;
       var orig = o[k];
-      var w = function(){ FB.reseed(); return orig.apply(this, arguments); };
+      var w = (k === 'start' && FB.paidMode === 'entry')
+        ? function(){
+            FB.pinned = freshSeed(); FB.reseed(); FB.inPaid = true;
+            try { return orig.apply(this, arguments); }
+            finally { FB.pinned = null; try { paint(); } catch (e) {} }
+          }
+        : function(){ FB.reseed(); return orig.apply(this, arguments); };
       w.__fbSeeded = true;
       o[k] = w;
     });
@@ -583,6 +612,10 @@ canvas{ touch-action:none; }
   function paint(){
     if (!box) return;
     var rng = FB.usesRandom();
+    if (FB.inPaid) {   /* a paid entry's own run: no date, and nothing to toggle */
+      box.innerHTML = '<span class="fb-seed-lbl"><span class="l">Your paid run</span><span class="s">PAID</span></span>';
+      return;
+    }
     var long  = !rng ? 'Today' : FB.daily ? 'Daily Challenge' : 'Practice run';
     var short = !rng ? 'TODAY' : FB.daily ? 'DAILY' : 'PRACTICE';
     box.innerHTML =
