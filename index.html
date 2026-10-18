@@ -1082,11 +1082,11 @@ body:not(.mode-paid) .app .facts{ display:block !important; }
     <div class="card">
       <h2 id="rulesTitle">HOW TO PLAY</h2>
       <ul class="rules">
-        <li>Clear all <b>12 rivets</b> off the rig before the clock runs out.</li>
+        <li>Clear all <b>12 rivets</b> off the rig before the clock runs out. Every rivet you pull flies into the <b>FinnBot</b> in the corner — twelve and the Bot is built.</li>
         <li>Arrows / WASD / the d-pad to walk and to climb ladders; <b>JUMP</b> / Space to jump.</li>
-        <li>Rivet <b>100</b> \u00b7 oil can <b>50</b> and it <b>holds the clock</b> for a few seconds \u00b7 the time you have left is paid as a <b>bonus</b> when the rig is clear.</li>
-        <li><b>Clankers</b> work the girders and ladders and drink any oil can you leave behind. The ones with an <b>amber lamp</b> are tracking you \u2014 they will climb to your tier.</li>
-        <li>From stage 9 the caged <b>Crane</b> is loose \u2014 it ignores the rig and flies straight at you.</li>
+        <li>Rivet <b>100</b> · $OIL can <b>50</b> and it <b>holds the clock</b> for a few seconds · the time you have left is paid as a <b>bonus</b> when the rig is clear.</li>
+        <li><b>Clankers</b> (the yellow hard-hat bots) work the girders and ladders and drink any $OIL can you leave behind. The ones with a flashing <b>red lamp</b> are tracking you — they will climb to your tier.</li>
+        <li>From stage 9 the caged <b>Crane</b> drone is loose — it ignores the rig and flies straight at you.</li>
         <li><b>5 lives</b>, one more every 10,000. A touch, the clock, a fall off the bottom, or riding a lift into the roof all scrap you.</li>
         <li>Score ranks on the leaderboard; time is the tiebreak.</li>
       </ul>
@@ -1829,156 +1829,302 @@ if(!HEADLESS){
     if(s.lives!==livesShown){ livesShown=s.lives; elLives.innerHTML='';
       for(let i=0;i<Math.min(s.lives,8);i++){ const d=document.createElement('span'); d.className='life'; elLives.appendChild(d);} } }
 
-  /* ================= pixel-art render (FinnBots palette) ================== */
-  const PLUM='#5f4c57', PLUMD='#3e323a', AMBER='#f2a03d', AMBERD='#a8641d',
-        ELEC='#3a6ff7', MINT='#6fd8c2', CREAM='#fdf3e7', RUST='#c2562f';
+  /* ================= THE ART — reworked 2026-10-18 =========================
+     Founder, on Mr Bot's rework the same day: "this is very good do the same for rivetbot".
+     So: the rig is a skyscraper going up at dusk; every rivet you pull flies into a FinnBot
+     that is RIVETED TOGETHER in the corner, feet first, and the twelfth rivet finishes it;
+     the Clanker and the Crane are real pixel sprites in the FinnBots house style (ink
+     outline, steel panels, round eyes, a heart on the Bot's chest).
 
+     PURE RENDER. Nothing here writes `s`: hit boxes, speeds and positions are the sim's own,
+     and the cast keeps its 16 px parity (CLONE-FIDELITY-AUDIT, RIVETBOT). The flying rivets
+     and the skyline are render-only state kept in this closure. Sprites are pixel maps,
+     run-length encoded once and drawn as rects snapped to the supersampled backing store's
+     device pixels, so adjacent runs never seam. ======================================== */
+  const AMBER='#f2a03d', CREAM='#fdf3e7', MINT='#6fd8c2', INK='#151021';
+  /* runs are merged DOWN as well as across: a run repeated on the next row grows taller instead of
+     becoming another rect, so a sprite is a handful of blocks, not a scan of 1px slivers */
+  function mkSprite(rows, pal){
+    const runs=[], w=rows[0].length; let open={};
+    for(let y=0;y<rows.length;y++){ const r=rows[y], next={}; let x=0;
+      while(x<w){ const ch=r.charAt(x); if(ch==='.'){ x++; continue; }
+        const x0=x; while(x<w && r.charAt(x)===ch) x++;
+        const key=x0+','+(x-x0)+','+ch, prev=open[key];
+        if(prev){ prev[4]++; next[key]=prev; }
+        else { const run=[x0,y,x-x0,ch,1]; runs.push(run); next[key]=run; } }
+      open=next; }
+    return { w, h:rows.length, runs, pal };
+  }
+  const snap=v=>Math.round(v*SS)/SS;
+  /* draw a sprite into a dw x dh box; rows < minRow use `ghost` (a part not built yet) */
+  function blit(spr,x,y,dw,dh,flip,pal,minRow,ghost){
+    const sx=dw/spr.w, sy=dh/spr.h, P=pal||spr.pal;
+    for(const r of spr.runs){
+      const c0=flip ? spr.w-r[0]-r[2] : r[0], x0=snap(x+c0*sx), x1=snap(x+(c0+r[2])*sx);
+      const top=r[1], bot=r[1]+r[4];
+      /* a merged run that straddles the build line is drawn in two parts: ghost above, built below */
+      const cut=(minRow===undefined) ? top : Math.max(top, Math.min(bot, minRow));
+      if(cut>top){ ctx.fillStyle=ghost[r[3]]; ctx.fillRect(x0, snap(y+top*sy), x1-x0, snap(y+cut*sy)-snap(y+top*sy)); }
+      if(bot>cut){ ctx.fillStyle=P[r[3]]; ctx.fillRect(x0, snap(y+cut*sy), x1-x0, snap(y+bot*sy)-snap(y+cut*sy)); }
+    }
+  }
+
+  /* ---- the cast ---- */
+  const CLANK_TOP=[ '.......bb.......',
+                    '.......KK.......',
+                    '.......KK.......',
+                    '...KKKKKKKKKK...',
+                    '..KmmmmmmmmmmK..',
+                    '..KmKKKKKKKKmK..' ];
+  const CLANK_EYE={ r:'..KmKvvvveeKmK..', l:'..KmKeevvvvKmK..' };
+  const CLANK_BODY=[ '..KmKKKKKKKKmK..',
+                     '..KMMMMMMMMMMK..',
+                     '.KKKKKKKKKKKKKK.',
+                     'KgKMMMMMMMMMMKgK',
+                     'KgKMyMMMMMMyMKgK',
+                     'KgKMMMrrrrMMMKgK',
+                     '.KKMMMMMMMMMMKK.',
+                     '..KKKKKKKKKKKK..',
+                     '.KttttttttttttK.' ];
+  const CLANK_TREAD=[ ['KtTtTtTtTtTtTtTK','.KKKKKKKKKKKKKK.'], ['KTtTtTtTtTtTtTtK','.KKKKKKKKKKKKKK.'] ];
+  /* rogue construction bots: hard-hat yellow, so they pop off the dusk AND off the red beams */
+  const CLANK_PAL={ K:INK, m:'#ffe27a', M:'#f2b630', g:'#6b7280', y:'#151021', r:'#3a2a10', t:'#3a3f52', T:'#8b93a8' };
+  /* a HUNTER is tracking you, so it reads at a glance: a hot visor and a live amber beacon;
+     a patroller's visor is cool and its lamp is mint (the sim's own k.hunt, read-only) */
+  const HUNT_PAL=Object.assign({},CLANK_PAL,{ v:'#4a0e0e', e:'#ff3b30', b:'#ff3b30' });
+  const PATROL_PAL=Object.assign({},CLANK_PAL,{ v:'#123c38', e:MINT, b:MINT });
+  const HUNT_BLINK=Object.assign({},HUNT_PAL,{ b:'#fff1c0' });
+  const CLANKER={};
+  for(const side of ['l','r']) for(const f of [0,1])
+    CLANKER[side+f]=mkSprite(CLANK_TOP.concat([CLANK_EYE[side]],CLANK_BODY,CLANK_TREAD[f]), CLANK_PAL);
+
+  const CRANE=mkSprite([ '......KKKK......',
+                         '.......KK.......',
+                         '..KKKKKKKKKKKK..',
+                         '.KbbbbbbbbbbbbK.',
+                         'KbbWWWbbbbWWWbbK',
+                         'KbbWkWbbbbWkWbbK',
+                         'KbbWWWbbbbWWWbbK',
+                         'KBbbbbbbbbbbbbBK',
+                         '.KBBBBBBBBBBBBK.',
+                         '..KKKKKKKKKKKK..',
+                         '.......KK.......',
+                         '.......KK.......',
+                         '....KKKKKKKK....',
+                         '....KRRRRRRK....',
+                         '....KRRKKRRK....',
+                         '....KssKKssK....' ],
+    { K:INK, b:'#3a6ff7', B:'#2445a8', W:'#ffe3e3', k:'#ff2a3a', R:'#e8413c', s:'#dfe5ee' });
+
+  /* the FinnBot that the rivets build: feet first, one band per rivet */
+  const BOT_ROWS=[ '...pp......pp...',
+                   '....K......K....',
+                   '.KKKKKKKKKKKKKK.',
+                   '.KllllllllllllK.',
+                   '.KbWWWbbbbWWWbK.',
+                   'gKbWkWbbbbWkWbKg',
+                   'gKbWWWbbbbWWWbKg',
+                   '.KbKKKKKKKKKKbK.',
+                   '.KbKWWKWWKWWKbK.',
+                   '.KKKKKKKKKKKKKK.',
+                   '....KKKKKKKK....',
+                   'KKKKKKKKKKKKKKKK',
+                   'KgKbbbbbbbRRbKgK',
+                   'KgKbcbbbbRRRRKgK',
+                   'KgKbbybbbbRRbKgK',
+                   'KcKbbbbbbbbbbKcK',
+                   '.KKBBBBBBBBBBKK.',
+                   '...KgK....KgK...',
+                   '...KgK....KgK...',
+                   '..KbbbK..KbbbK..',
+                   '..KKKKK..KKKKK..' ];
+  const BOT_PAL={ K:INK, b:'#4f97de', l:'#a6d8f7', B:'#2b5d9e', W:'#f6f9ff', k:INK, R:'#ff3b4e',
+                  p:'#c58cff', g:'#c3cbdb', c:'#39c6ff', y:'#ffd23f' };
+  const BOT=mkSprite(BOT_ROWS, BOT_PAL);
+  const BOT_GHOST={}; for(const k in BOT_PAL) BOT_GHOST[k]= k==='K' ? 'rgba(170,190,240,.40)' : 'rgba(170,190,240,.10)';
+  const BOT_LIT=Object.assign({},BOT_PAL,{ k:'#ffe066' });
+
+  const RIVET=mkSprite([ '..KKKK..',
+                         '.KyyyyK.',
+                         'KyWyyyoK',
+                         'KyyyyyoK',
+                         'KyyyyooK',
+                         'KoyyoooK',
+                         '.KooooK.',
+                         '..KKKK..' ], { K:INK, y:'#ffd23f', W:'#fffbe0', o:'#c9861a' });
+  const CAN=mkSprite([ '...KKK....',
+                       '...KsK....',
+                       '.KKKKKKKK.',
+                       'KllllllllK',
+                       'KppppWpppK',
+                       'KpppWWWppK',
+                       'KppWWWWWpK',
+                       'KppWWWWWpK',
+                       'KpppWWWppK',
+                       'KppppppppK',
+                       'KPPPPPPPPK',
+                       '.KKKKKKKK.' ], { K:INK, s:'#c3cbdb', l:'#ffb3d6', p:'#e8559a', W:'#fff0f7', P:'#a33a6c' });
+
+  /* ---- the backdrop: a city at dusk, built once from a fixed hash so it never shimmers ---- */
+  const SKYLINE=(function(){ const b=[]; let h=0x9e3779b9>>>0;
+    const nx=()=>{ h=(h*1664525+1013904223)>>>0; return h/4294967296; };
+    for(let x=-8;x<RUN.w;){ const w=22+Math.floor(nx()*34), ht=50+Math.floor(nx()*120), far=nx()<0.45;
+      const win=[]; for(let wy=RUN.h-ht+8; wy<RUN.h-6; wy+=9) for(let wx=x+4; wx<x+w-5; wx+=7) if(nx()<0.32) win.push([wx,wy]);
+      b.push({x, w, top:RUN.h-ht, far, win}); x+=w+(far?-6:2); }
+    const st=[]; for(let i=0;i<46;i++) st.push([Math.floor(nx()*RUN.w), Math.floor(nx()*RUN.h*0.45), nx()]);
+    return { b, st }; })();
   function bg(){
     const g=ctx.createLinearGradient(0,0,0,RUN.h);
-    g.addColorStop(0,'#241a22'); g.addColorStop(0.55,'#2e2028'); g.addColorStop(1,'#1a1216');
+    g.addColorStop(0,'#131735'); g.addColorStop(0.5,'#2b2452'); g.addColorStop(0.82,'#5a2f5e'); g.addColorStop(1,'#8a3f52');
     ctx.fillStyle=g; ctx.fillRect(0,0,RUN.w,RUN.h);
-    ctx.globalAlpha=0.06; ctx.strokeStyle=MINT; ctx.lineWidth=1; ctx.beginPath();
-    for(let x=0;x<RUN.w;x+=TS){ ctx.moveTo(x+0.5,0); ctx.lineTo(x+0.5,RUN.h); }
-    for(let y=0;y<RUN.h;y+=TS){ ctx.moveTo(0,y+0.5); ctx.lineTo(RUN.w,y+0.5); }
-    ctx.stroke(); ctx.globalAlpha=1;
+    for(const [x,y,b] of SKYLINE.st){ ctx.fillStyle = b>0.8 ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.25)'; ctx.fillRect(x,y,1,1); }
+    for(const pass of [true,false]) for(const b of SKYLINE.b){ if(b.far!==pass) continue;
+      ctx.fillStyle = pass ? '#2a2148' : '#1a1630'; ctx.fillRect(b.x,b.top,b.w,RUN.h-b.top);
+      ctx.fillStyle = pass ? 'rgba(255,190,110,.18)' : 'rgba(255,200,120,.32)';
+      for(const [wx,wy] of b.win) ctx.fillRect(wx,wy,3,4); }
     const v=ctx.createRadialGradient(RUN.w/2,RUN.h/2,RUN.h*0.3,RUN.w/2,RUN.h/2,RUN.h*0.85);
-    v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(0,0,0,0.45)');
+    v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(0,0,0,0.40)');
     ctx.fillStyle=v; ctx.fillRect(0,0,RUN.w,RUN.h);
   }
 
-  function girderTile(x,y){
-    ctx.fillStyle=PLUMD; ctx.fillRect(x,y,TS,TS);
-    ctx.fillStyle=AMBERD; ctx.fillRect(x,y+2,TS,TS-5);
-    ctx.fillStyle=AMBER;  ctx.fillRect(x,y+2,TS,3);          /* lit top edge */
-    ctx.fillStyle='#7b4415'; ctx.fillRect(x,y+TS-4,TS,2);    /* shadow lip   */
-    ctx.fillStyle='#ffd9a0'; ctx.fillRect(x+3,y+7,2,2); ctx.fillRect(x+11,y+7,2,2); /* studs */
-    ctx.fillStyle=PLUMD; ctx.fillRect(x,y,TS,2);
+  /* red-oxide I-beams: flange, web with lightening holes, flange, with end caps where a run stops */
+  function girderTile(x,y,c,r){
+    ctx.fillStyle='#e0673a'; ctx.fillRect(x,y,TS,4);
+    ctx.fillStyle='#ffa577'; ctx.fillRect(x,y,TS,1);
+    ctx.fillStyle='#7c2c1a'; ctx.fillRect(x,y+4,TS,7);
+    ctx.fillStyle='#c4512c'; ctx.fillRect(x,y+11,TS,3);
+    ctx.fillStyle='#3a1810'; ctx.fillRect(x,y+14,TS,2);
+    ctx.fillStyle='#4a1a0e'; ctx.fillRect(x+6,y+5,4,5);
+    ctx.fillStyle='#ffc19a'; ctx.fillRect(x+2,y+1,2,2); ctx.fillRect(x+12,y+1,2,2);
+    ctx.fillStyle='#2a0f08';
+    if(!sol(s,c-1,r)) ctx.fillRect(x,y,1,TS-2);
+    if(!sol(s,c+1,r)) ctx.fillRect(x+TS-1,y,1,TS-2);
   }
   function ladderTile(x,y){
-    ctx.fillStyle='#2b3a44'; ctx.fillRect(x+2,y,3,TS); ctx.fillRect(x+TS-5,y,3,TS);
-    ctx.fillStyle=MINT; ctx.fillRect(x+2,y,2,TS); ctx.fillRect(x+TS-5,y,2,TS);
-    ctx.fillStyle='#9fe8d8'; ctx.fillRect(x+4,y+4,TS-8,2); ctx.fillRect(x+4,y+11,TS-8,2);
+    ctx.fillStyle='#4d5670'; ctx.fillRect(x+2,y,3,TS); ctx.fillRect(x+TS-5,y,3,TS);
+    ctx.fillStyle='#d4dcec'; ctx.fillRect(x+2,y,2,TS); ctx.fillRect(x+TS-5,y,2,TS);
+    ctx.fillStyle='#9aa6bd'; ctx.fillRect(x+4,y+3,TS-8,2); ctx.fillRect(x+4,y+11,TS-8,2);
   }
   function drawGrid(){
     for(let r=0;r<TH;r++) for(let c=0;c<TW;c++){
       const ch=s.grid[r][c];
-      if(ch==='#') girderTile(c*TS,r*TS);
+      if(ch==='#') girderTile(c*TS,r*TS,c,r);
       else if(ch==='H') ladderTile(c*TS,r*TS);
     }
   }
+  /* lift cars hang on two cables, so you can read which way they go */
   function drawLifts(){
     for(const l of s.lifts){
       const w=LIFT_W*TS;
-      ctx.fillStyle=PLUMD; ctx.fillRect(l.x,l.y,w,8);
-      ctx.fillStyle=ELEC;  ctx.fillRect(l.x+1,l.y+1,w-2,4);
-      ctx.fillStyle='#9ec0ff'; ctx.fillRect(l.x+1,l.y+1,w-2,2);
-      ctx.fillStyle=PLUMD; ctx.fillRect(l.x+2,l.y+6,3,2); ctx.fillRect(l.x+w-5,l.y+6,3,2);
+      ctx.fillStyle='rgba(20,16,33,.75)'; ctx.fillRect(l.x+3,0,1,Math.max(0,l.y)); ctx.fillRect(l.x+w-4,0,1,Math.max(0,l.y));
+      ctx.fillStyle=INK; ctx.fillRect(l.x,l.y,w,9);
+      for(let i=0;i<w-2;i+=4){ ctx.fillStyle=((i>>2)&1)?INK:'#f2c230'; ctx.fillRect(l.x+1+i,l.y+1,Math.min(4,w-2-i),2); }
+      ctx.fillStyle='#7f8aa3'; ctx.fillRect(l.x+1,l.y+3,w-2,4);
+      ctx.fillStyle='#b9c3d6'; ctx.fillRect(l.x+1,l.y+3,w-2,1);
     }
   }
   function drawRivets(){
-    const gl=Math.floor(t/140)%4===0;
     for(const it of s.rivets){
-      const x=it.c*TS+4, y=it.r*TS+5;
-      ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y-1,10,10);
-      ctx.fillStyle=AMBERD; ctx.fillRect(x,y,8,8);
-      ctx.fillStyle=AMBER;  ctx.fillRect(x,y,8,5);
-      ctx.fillStyle=CREAM;  ctx.fillRect(x+2,y+1,2,2);
-      if(gl){ ctx.fillStyle='#fff'; ctx.fillRect(x+5,y-2,2,2); ctx.fillRect(x+7,y+1,2,2); }
+      const bob=reduce?0:(Math.floor((t+it.c*97)/260)%2);
+      const x=it.c*TS+4, y=it.r*TS+5-bob;
+      ctx.fillStyle='rgba(255,190,60,.30)'; ctx.beginPath(); ctx.arc(x+4,y+4,7,0,Math.PI*2); ctx.fill();
+      blit(RIVET,x,y,8,8);
+      if(!reduce && Math.floor((t+it.c*131+it.r*57)/90)%14===0){ ctx.fillStyle='#fff'; ctx.fillRect(x+6,y-3,1,3); ctx.fillRect(x+5,y-2,3,1); }
     }
   }
   function drawCans(){
-    for(const it of s.cans){
-      const x=it.c*TS+3, y=it.r*TS+3;
-      ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y-1,12,13);
-      ctx.fillStyle='#2f7d6b'; ctx.fillRect(x,y,10,11);
-      ctx.fillStyle=MINT; ctx.fillRect(x,y,10,3);
-      ctx.fillStyle=AMBER; ctx.fillRect(x,y+5,10,2);
-      ctx.fillStyle=PLUMD; ctx.fillRect(x+3,y-3,4,3);
-    }
+    for(const it of s.cans) blit(CAN,it.c*TS+3,it.r*TS+3,10,12);
   }
-  /* original FinnBots enemy: tracked scrap-bot with a single amber visor */
   function drawClanker(k){
-    /* ARCADE/SPECTRUM PARITY (researched 2026-09-25): in the 1983 original every sprite —
-       the player AND the enemies — is 16x16, 32 bytes at 2 bytes per row, drawn by one
-       routine that loops `LD B,$10 ; 16 pixels high` and indexes its table by `a * 32`
-       (confirmed in the reverse-engineered source). Our hero already drew 16 wide; the
-       Clanker drew 13, so the cast was ~20% small. Widened to 16 over its UNCHANGED 11px
-       collision box — the same sprite-over-box ratio the hero uses, so the sprite still
-       over-covers its hitbox and nothing about the physics moves. */
-    const x=Math.round(k.x), y=Math.round(k.y), wob=Math.floor(t/120)%2;
-    ctx.fillStyle=PLUMD; ctx.fillRect(x-2,y-1,16,17);
-    ctx.fillStyle=PLUM;  ctx.fillRect(x-1,y+1,14,11);
-    ctx.fillStyle='#7a6470'; ctx.fillRect(x-1,y+1,14,3);
-    /* a HUNTER is tracking you, so it has to be readable at a glance: hot visor
-       and a live amber beacon; a patroller's visor is dim and its lamp is mint */
-    ctx.fillStyle=k.hunt?AMBER:'#a8763c'; ctx.fillRect(x+1,y+4,9,4);
-    ctx.fillStyle=RUST;  ctx.fillRect(x+1+(k.dir>0?5:0),y+4,4,4);
-    ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y+12,14,4);
-    ctx.fillStyle='#8f7a86'; ctx.fillRect(x+wob,y+13,4,2); ctx.fillRect(x+8-wob,y+13,4,2);
-    ctx.fillStyle=k.hunt?AMBER:MINT; ctx.fillRect(x+5,y-4,2,5); ctx.fillRect(x+4,y-5,4,2);
-    if(k.hunt && wob){ ctx.fillStyle=CREAM; ctx.fillRect(x+4,y-6,4,1); }
+    const x=Math.round(k.x), y=Math.round(k.y), f=Math.floor(t/120)%2;
+    const spr=CLANKER[(k.dir>0?'r':'l')+(k.mode==='climb'?0:f)];
+    const pal=k.hunt ? (f ? HUNT_BLINK : HUNT_PAL) : PATROL_PAL;
+    blit(spr,x-2,y-4,16,18,false,pal);
   }
-  /* original FinnBots flier: rotor drone with a magnet hook */
   function drawCrane(cr){
-    const x=Math.round(cr.x), y=Math.round(cr.y), sp=Math.floor(t/60)%2;
-    ctx.fillStyle=PLUMD; ctx.fillRect(x-1,y+1,18,14);
-    ctx.fillStyle=ELEC;  ctx.fillRect(x,y+2,16,11);
-    ctx.fillStyle='#9ec0ff'; ctx.fillRect(x,y+2,16,3);
-    ctx.fillStyle=CREAM; ctx.fillRect(x+3,y+6,4,3); ctx.fillRect(x+9,y+6,4,3);
-    ctx.fillStyle=RUST;  ctx.fillRect(x+4,y+7,2,2); ctx.fillRect(x+10,y+7,2,2);
-    ctx.fillStyle='#cfe0ff'; ctx.fillRect(x-3+sp*2,y,22-sp*4,2);   /* rotor blur */
-    ctx.fillStyle=AMBER; ctx.fillRect(x+6,y+13,4,3);
-    ctx.fillStyle=PLUMD; ctx.fillRect(x+5,y+15,6,2);
+    const x=Math.round(cr.x), y=Math.round(cr.y), sp=Math.floor(t/50)%2;
+    blit(CRANE,x,y-3,16,16);
+    ctx.fillStyle='rgba(220,232,255,.75)';
+    if(sp){ ctx.fillRect(x-4,y-4,24,1); ctx.fillRect(x+2,y-5,12,1); }
+    else  { ctx.fillRect(x-1,y-5,18,1); ctx.fillRect(x+5,y-4,6,1); }
   }
-  /* hero: Bot 2969 PNG when it loads, drawn-bot fallback otherwise */
+  /* the Crane waits in a hanging cage until it is released */
+  function drawCage(){
+    const cx=s.cageC*TS, cy=s.cageR*TS;
+    ctx.fillStyle='#4d5670'; ctx.fillRect(cx+7,0,2,cy);
+    blit(CRANE,cx,cy+1,16,14,false,null);
+    ctx.fillStyle='#d4dcec'; ctx.fillRect(cx-2,cy-1,20,2); ctx.fillRect(cx-2,cy+15,20,2);
+    for(let i=0;i<5;i++) ctx.fillRect(cx-2+i*5,cy-1,1,18);
+  }
+  /* Mr Bot is the real Bot 2969 art. A 512px source drawn at 16x18 needs SMOOTHED sampling:
+     nearest-neighbour at that ratio drops whole rows of the outline. */
   function drawHero(){
     const p=s.p, x=Math.round(p.x)-3, y=Math.round(p.y)-2, blink=(s.beat==='dying');
-    if(blink && Math.floor(t/90)%2) return;
-    /* contact shadow so the bot sits ON the girder, not floating over it */
     ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillRect(x+3,y+16,10,2);
+    if(blink && Math.floor(t/90)%2) ctx.globalAlpha=0.25;
     if(heroOK){
-      ctx.save();
-      /* a warm rim that follows the sprite's own alpha — the rig is dark and the
-         hero has to stay readable against it at 16px */
-      ctx.shadowColor='rgba(253,243,231,.85)'; ctx.shadowBlur=5;
+      ctx.save(); ctx.imageSmoothingEnabled=true; try{ ctx.imageSmoothingQuality='high'; }catch(e){}
+      ctx.shadowColor='rgba(253,243,231,.85)'; ctx.shadowBlur=4;
       if(p.face<0){ ctx.translate(x+16,y); ctx.scale(-1,1); ctx.drawImage(hero,0,0,16,18); }
       else ctx.drawImage(hero,x,y,16,18);
-      ctx.shadowBlur=0;
       ctx.restore();
-      if(p.climbing){ ctx.fillStyle=MINT; ctx.fillRect(x+2,y+16,3,2); ctx.fillRect(x+11,y+16,3,2); }
-      return;
-    }
-    ctx.fillStyle=PLUMD; ctx.fillRect(x+1,y+1,14,17);
-    ctx.fillStyle=AMBER; ctx.fillRect(x+2,y+2,12,15);
-    ctx.fillStyle=CREAM; ctx.fillRect(x+4,y+5,8,6);
-    ctx.fillStyle=PLUMD; ctx.fillRect(x+5,y+7,2,2); ctx.fillRect(x+9,y+7,2,2);
-    ctx.fillStyle=MINT;  ctx.fillRect(x+7,y-1,2,3);
+    } else blit(BOT,x,y,16,18);
+    ctx.globalAlpha=1;
   }
-  function banner(txt,sub){
+
+  /* ---- the build: every rivet pulled flies to the FinnBot in the corner ---- */
+  const BX=RUN.w-22, BY=2, PER_SCREEN=12;
+  let seen=null, seenStage=-1, flash=0; const flyers=[];
+  function trackRivets(){
+    const now=new Set(s.rivets.map(it=>it.c+','+it.r));
+    if(seen && seenStage===s.stage && !reduce){
+      for(const k of seen) if(!now.has(k)){ const [c,r]=k.split(',').map(Number);
+        flyers.push({ x0:c*TS+8, y0:r*TS+9, t0:t }); } }
+    seen=now; seenStage=s.stage;
+  }
+  function drawFlyers(){
+    for(let i=flyers.length-1;i>=0;i--){ const f=flyers[i], u=(t-f.t0)/420;
+      if(u>=1){ flyers.splice(i,1); flash=t; continue; }
+      const e=u*u*(3-2*u), tx=BX+8, ty=BY+14;
+      const x=f.x0+(tx-f.x0)*e, y=f.y0+(ty-f.y0)*e-Math.sin(u*Math.PI)*36;
+      blit(RIVET,x-3,y-3,6,6); }
+  }
+  function drawBuild(){
+    const got=Math.max(0,Math.min(PER_SCREEN,PER_SCREEN-s.rivets.length)), done=got>=PER_SCREEN;
+    const minRow=Math.round(BOT.h*(1-got/PER_SCREEN));
+    ctx.fillStyle='rgba(12,10,26,.55)'; ctx.fillRect(BX-3,BY-1,22,BOT.h+3);
+    if(t-flash<160){ ctx.fillStyle='rgba(255,210,63,.35)'; ctx.fillRect(BX-3,BY-1,22,BOT.h+3); }
+    blit(BOT,BX,BY,16,BOT.h,false,done?BOT_LIT:BOT_PAL,minRow,BOT_GHOST);
+    ctx.fillStyle=done?'#ffe066':'rgba(253,243,231,.75)'; ctx.font='9px ui-monospace,monospace';
+    ctx.textAlign='right'; ctx.fillText('BOT '+got+'/'+PER_SCREEN,BX-6,10); ctx.textAlign='left';
+  }
+
+  function banner(txt,sub,bot){
     ctx.textAlign='center';
-    ctx.fillStyle='rgba(20,12,16,.72)'; ctx.fillRect(0,RUN.h/2-30,RUN.w,60);
+    ctx.fillStyle='rgba(16,12,30,.78)'; ctx.fillRect(0,RUN.h/2-34,RUN.w,68);
+    ctx.fillStyle='#f2c230'; ctx.fillRect(0,RUN.h/2-34,RUN.w,2); ctx.fillRect(0,RUN.h/2+32,RUN.w,2);
+    if(bot){ const hop=reduce?0:Math.abs(Math.sin(t/160))*4;
+      blit(BOT,RUN.w/2-200,RUN.h/2-22-hop,32,42,false,BOT_LIT); blit(BOT,RUN.w/2+168,RUN.h/2-22-hop,32,42,true,BOT_LIT); }
     ctx.fillStyle=AMBER; ctx.font='bold 20px ui-monospace,monospace';
     ctx.fillText(txt,RUN.w/2,RUN.h/2-2);
     if(sub){ ctx.fillStyle=CREAM; ctx.font='12px ui-monospace,monospace'; ctx.fillText(sub,RUN.w/2,RUN.h/2+18); }
     ctx.textAlign='left';
   }
   function draw(){
+    trackRivets();
     bg(); drawGrid(); drawLifts(); drawRivets(); drawCans();
     for(const k of s.clankers) drawClanker(k);
     if(s.crane && s.crane.out) drawCrane(s.crane);
-    else if(s.crane){ ctx.fillStyle=PLUMD; ctx.fillRect(s.cageC*TS-2,s.cageR*TS,20,16);
-      ctx.fillStyle=ELEC; ctx.globalAlpha=.5; ctx.fillRect(s.cageC*TS,s.cageR*TS+2,16,12); ctx.globalAlpha=1;
-      ctx.strokeStyle=MINT; ctx.lineWidth=1;
-      for(let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo(s.cageC*TS+i*5+1.5,s.cageR*TS); ctx.lineTo(s.cageC*TS+i*5+1.5,s.cageR*TS+16); ctx.stroke(); } }
+    else if(s.crane) drawCage();
     drawHero();
-    /* stage title + state banners */
-    ctx.fillStyle='rgba(253,243,231,.55)'; ctx.font='9px ui-monospace,monospace';
+    if(flyers.length) drawFlyers();
+    ctx.fillStyle='rgba(253,243,231,.62)'; ctx.font='9px ui-monospace,monospace';
     ctx.fillText('STAGE '+s.stage+' · '+s.screenName,4,10);
-    ctx.textAlign='right'; ctx.fillText('RIVETS '+s.rivets.length,RUN.w-4,10); ctx.textAlign='left';
-    if(s.freezeMs>0){ ctx.fillStyle=MINT; ctx.font='9px ui-monospace,monospace';
-      ctx.textAlign='center'; ctx.fillText('CLOCK HELD',RUN.w/2,10); ctx.textAlign='left'; }
-    if(s.beat==='clear') banner('RIG CLEAR','TIME BONUS  +'+Math.max(0,s.timeLeft));
-    if(s.beat==='dying') banner('SCRAPPED','');
+    drawBuild();
+    if(s.freezeMs>0){ ctx.fillStyle='#ffb3d6'; ctx.font='9px ui-monospace,monospace';
+      ctx.textAlign='center'; ctx.fillText('$OIL — CLOCK HELD',RUN.w/2,10); ctx.textAlign='left'; }
+    if(s.beat==='clear') banner('BOT BUILT · RIG CLEAR','TIME BONUS  +'+Math.max(0,s.timeLeft),true);
+    if(s.beat==='dying') banner('SCRAPPED','',false);
   }
 
   /* ---------------- input: 4-way d-pad LEFT + round JUMP RIGHT ------------- */
